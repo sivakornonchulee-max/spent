@@ -670,7 +670,7 @@ async function parseWithGemini(text) {
 {"amount": number, "category": "food"|"goods"|"other", "note": "short description max 30 chars"}
 food=food&drinks, goods=shopping/products, other=transport/health/etc`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${CFG.geminiKey}`,{
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CFG.geminiKey}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
     });
@@ -690,7 +690,7 @@ async function parseImageWithGemini(base64, mimeType) {
 {"amount": number, "category": "food"|"goods"|"other", "note": "short description max 30 chars"}
 If no amount visible use 0.`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${CFG.geminiKey}`,{
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CFG.geminiKey}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:mimeType,data:base64}},{text:prompt}]}]})
     });
