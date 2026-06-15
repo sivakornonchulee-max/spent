@@ -483,12 +483,9 @@ body{
       Settings ⚙️
       <button class="modal-close" onclick="closeSettings()">✕</button>
     </div>
-    <div class="field-label">Gemini API Key</div>
-    <input class="text-input" id="cfgGemini" placeholder="AIza..." style="width:100%"/>
-    <div class="help-text">Get free key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a> → Get API Key</div>
     <div class="field-label">Google Apps Script URL</div>
     <input class="text-input" id="cfgScript" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%"/>
-    <div class="help-text">Deploy your Apps Script as Web App → copy URL here</div>
+    <div class="help-text">Deploy your Apps Script as Web App → copy URL here. AI parsing now runs inside Apps Script, so no API key is needed here.</div>
     <button class="save-btn" onclick="saveSettings()">Save settings</button>
   </div>
 </div>
@@ -509,12 +506,10 @@ body{
 
 <script>
 // ── CONFIG ──
-const GEMINI_KEY = 'AQ.Ab8RN6LHSMAZx5ufY_81O8nUcPBhoN-lIR_cOESYGDtMNujsCA';
 const SCRIPT_ID  = 'AKfycbzBGBkQJ7XCOz2nxHZn1C_nVR7FnL72WQT_40JwKguT-4QpBGAGYt2zdBlimIFN7zwx-A';
 const SCRIPT_URL = `https://script.google.com/macros/s/${SCRIPT_ID}/exec`;
 
 let CFG = {
-  geminiKey: localStorage.getItem('gem_key') || GEMINI_KEY,
   scriptUrl: localStorage.getItem('script_url') || SCRIPT_URL
 };
 
@@ -558,16 +553,13 @@ function showToast(msg, type='success') {
 
 // ── SETTINGS ──
 function openSettings() {
-  document.getElementById('cfgGemini').value = CFG.geminiKey;
   document.getElementById('cfgScript').value = CFG.scriptUrl;
   document.getElementById('modalOverlay').classList.add('show');
 }
 function closeSettings() { document.getElementById('modalOverlay').classList.remove('show'); }
 function closeSettingsOutside(e) { if(e.target===document.getElementById('modalOverlay')) closeSettings(); }
 function saveSettings() {
-  CFG.geminiKey = document.getElementById('cfgGemini').value.trim();
   CFG.scriptUrl = document.getElementById('cfgScript').value.trim();
-  localStorage.setItem('gem_key', CFG.geminiKey);
   localStorage.setItem('script_url', CFG.scriptUrl);
   closeSettings();
   showToast('✓ Settings saved');
@@ -661,44 +653,36 @@ function handleImage(event) {
   event.target.value = '';
 }
 
-// ── GEMINI TEXT ──
+// ── HELPER: call Apps Script ──
+async function callBackend(payload) {
+  if (!CFG.scriptUrl) { throw new Error('No Script URL — set it in ⚙️'); }
+  // No custom Content-Type header → avoids CORS preflight on Apps Script
+  const res = await fetch(CFG.scriptUrl, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+// ── PARSE TEXT (via Apps Script + Gemini) ──
 async function parseWithGemini(text) {
-  if (!CFG.geminiKey) { showToast('Add Gemini key in ⚙️','error'); return; }
   setStatus('','Asking Gemini…',true);
-  const prompt = `Parse this expense note into JSON only, no markdown:
-"${text}"
-{"amount": number, "category": "food"|"goods"|"other", "note": "short description max 30 chars"}
-food=food&drinks, goods=shopping/products, other=transport/health/etc`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CFG.geminiKey}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    const raw = data.candidates[0].content.parts[0].text.trim().replace(/```json?|```/g,'');
-    const parsed = JSON.parse(raw);
-    clearStatus(); showPreview(parsed);
+    const data = await callBackend({ action: 'parse_text', text });
+    clearStatus();
+    showPreview(data.result);
   } catch(err) { setStatus('error','Parse failed — '+err.message); }
 }
 
-// ── GEMINI IMAGE ──
+// ── PARSE IMAGE (via Apps Script + Gemini) ──
 async function parseImageWithGemini(base64, mimeType) {
-  if (!CFG.geminiKey) { showToast('Add Gemini key in ⚙️','error'); return; }
   setStatus('','Reading image…',true);
-  const prompt = `Extract expense from image. Return JSON only:
-{"amount": number, "category": "food"|"goods"|"other", "note": "short description max 30 chars"}
-If no amount visible use 0.`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CFG.geminiKey}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:mimeType,data:base64}},{text:prompt}]}]})
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    const raw = data.candidates[0].content.parts[0].text.trim().replace(/```json?|```/g,'');
-    const parsed = JSON.parse(raw);
-    clearStatus(); showPreview(parsed);
+    const data = await callBackend({ action: 'parse_image', base64, mimeType });
+    clearStatus();
+    showPreview(data.result);
   } catch(err) { setStatus('error','Image parse failed — '+err.message); }
 }
 
@@ -732,15 +716,11 @@ async function confirmSave() {
   }
   setStatus('','Saving to Sheets…',true);
   try {
-    await fetch(CFG.scriptUrl,{
-      method:'POST', mode:'no-cors',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({amount:entry.amount,category:entry.category,note:entry.note})
-    });
+    await callBackend({ action:'save', amount:entry.amount, category:entry.category, note:entry.note });
     showToast('🌸 Saved to Google Sheets!');
     clearStatus();
   } catch(err) {
-    showToast('Saved locally only','error');
+    showToast('Saved locally only — '+err.message,'error');
     clearStatus();
   }
 }
